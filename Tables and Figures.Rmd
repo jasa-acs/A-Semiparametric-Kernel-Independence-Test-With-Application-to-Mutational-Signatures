@@ -1,0 +1,292 @@
+---
+title: "TCGA mutational signature analysis in Section 5"
+author: "DongHyuk Lee and Bin Zhu"
+date: "December 24, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### 1. Data and preprocessing
+The signature loading data file <tt>TCGA_WES_sigProfiler_SBS_signatures_in_samples.csv</tt> can be downloaded from [here](https://www.synapse.org/#!Synapse:syn11801497) (available as of December 2020). 
+It contains signature loadings of the extracted signatures (descried in Section 5 of the manuscript). 
+Based on the COSMIC (Catalog Of Somatic Mutations In Cancer) database V3 ([here](https://cancer.sanger.ac.uk/cosmic/signatures/SBS/index.tt)), we removed signatures (e.g., SBS27) which were possibly caused by sequencing artefacts. 
+Note that SBS84, SBS85, …, SBS90 in COSMIC database are not available in the above loading data (modified on January 29, 2020). 
+In addition, we removed the duplicated tumor samples.
+```{r}
+TCGA_loadings1 <- read.csv("TCGA_WES_sigProfiler_SBS_signatures_in_samples.csv")
+### Available signatures without possible sequencing artefacts (from https://cancer.sanger.ac.uk/cosmic/signatures/SBS/index.tt, where SBS84 through SBS90 are not available in the loadings.)
+Sig_names <- c(paste0("SBS", 1:6), paste0("SBS7", letters[1:4]), paste0("SBS", 8:9),
+           paste0("SBS10", letters[1:2]), paste0("SBS", 11:16), paste0("SBS17", letters[1:2]),
+           paste0("SBS", 18:26), paste0("SBS", 28:42), "SBS44")
+### Remove duplicated samples
+sampleID <- substring(TCGA_loadings1$Sample.Names, 1, 12)
+sum(duplicated(sampleID)) ## 38 duplicatesd
+TCGA_loadings <- TCGA_loadings1[!duplicated(sampleID), c("Cancer.Types", Sig_names)]
+head(TCGA_loadings)
+table(TCGA_loadings$Cancer.Types)
+```
+In Section 5 of the manuscript, we focused on three gastrointestinal cancers: colorectal adenocarcinoma, esophageal adenocarcinoma and stomach adenocarcinoma. 
+The following codes demonstrate the preprocessing steps to exclude signatures 1) when total loading counts are less than 10
+and/or 2) when the number of subjects with non-zero loading counts is less than 5\% of the study size for each cancer type. 
+We also included processed datasets, `Reduced_ColoRect-AdenoCa.csv` for colorectal adenocarcinoma, `Reduced_Eso-AdenoCa.csv`for esophageal adenocarcinoma, and `Reduced_Stomach-AdenoCa.csv` for stomach adenocarcinoma.
+```{r}
+### Extract gastrointestinal cancers
+Gastro <- c("ColoRect-AdenoCa", "Eso-AdenoCa", "Stomach-AdenoCa")
+### Total counts (Tcnt) and Nonzero counts (Ncnt) of signatures across cancer type 
+Tcnt <- NULL
+Ncnt <- NULL
+for(typ in Gastro){
+  Tcnt <- rbind(Tcnt, colSums(TCGA_loadings[TCGA_loadings$Cancer.Types == typ,-1]))
+  Ncnt <- rbind(Ncnt, apply(TCGA_loadings[TCGA_loadings$Cancer.Types == typ,-1], 2, function(x) sum(x != 0)))
+}
+### Total loading counts per each cancer type
+Tcnt.D <- cbind.data.frame(table(TCGA_loadings$Cancer.Types[TCGA_loadings$Cancer.Types %in% Gastro]), Tcnt)
+Tcnt.D
+### The number of subjects with non-zero loading counts
+Ncnt.D <- cbind.data.frame(table(TCGA_loadings$Cancer.Types[TCGA_loadings$Cancer.Types %in% Gastro]), Ncnt)
+Ncnt.D
+
+### Extract columns (signatures) when total loading counts (Tcnt.D) > 10 and non-zero loading counts (Ncnt.D) > 0.05*(# of samples)
+## colorectal adenocarcinoma
+Sigs <- names(Tcnt.D)[-(1:2)][Tcnt.D[1, -(1:2)] > 10 & Ncnt.D[1, -(1:2)] > 0.05*Ncnt.D$Freq[1]]
+Colo <- TCGA_loadings[TCGA_loadings$Cancer.Types == Gastro[1], Sigs]
+head(Colo)
+Colo_chk <- read.csv("Reduced_ColoRect-AdenoCa.csv")
+#head(Colo_chk)
+sum(abs(Colo_chk - Colo))
+
+## esophageal adenocarcinoma
+Sigs <- names(Tcnt.D)[-(1:2)][Tcnt.D[2, -(1:2)] > 10 & Ncnt.D[2, -(1:2)] > 0.05*Ncnt.D$Freq[2]]
+Eso <- TCGA_loadings[TCGA_loadings$Cancer.Types == Gastro[2], Sigs]
+head(Eso)
+Eso_chk <- read.csv("Reduced_Eso-AdenoCa.csv")
+#head(Eso_chk)
+sum(abs(Eso_chk - Eso))
+
+## stomach adenocarcinoma
+Sigs <- names(Tcnt.D)[-(1:2)][Tcnt.D[3, -(1:2)] > 10 & Ncnt.D[3, -(1:2)] > 0.05*Ncnt.D$Freq[3]]
+Stom <- TCGA_loadings[TCGA_loadings$Cancer.Types == Gastro[3], Sigs]
+head(Stom)
+Stom_chk <- read.csv("Reduced_Stomach-AdenoCa.csv")
+#head(Stom_chk)
+sum(abs(Stom_chk - Stom))
+```
+As a result, each column represents the signature loadings (as the number of point mutations contributed by a given signature) after preprocessing.
+Eight signatures are included in colorectal adenocarcinoma while nine signatures are in other two cancer types. 
+Among them, signatures 1, 2, 5 and 13 are present in all three cancer types but others are cancer-specific signatures.
+
+
+### 2. Association tests
+First we need to install `SKIT` package in the following way.
+```{r}
+### For Windows
+# install.packages("SKIT_0.0.2.zip", repos = NULL)
+### or
+# install.packages("SKIT_0.0.2.tar.gz", repos = NULL, type = "source")
+### For UNIX
+# install.packages("SKIT_0.0.2.tar.gz", repos = NULL)
+library(SKIT)
+```
+Here, we present results for one cancer type, colorectal adenocarcinoma, but results corresponding to other cancer types can be obtained similarly as described in Section 2.1.
+```{r}
+### All possible combinations of signatures of colorectal adenocarcinoma
+Allpairs <- combn(names(Colo), 2)
+ncol(Allpairs)
+### Normalization with respect to total counts (Section 2.2 and Section 5 in the manuscript)
+Colo_norm <- t(apply(Colo,1, function(x){x/sum(x)}))
+Colo_norm[is.nan(Colo_norm)] <- 0
+```
+In the manuscript, we used $B = 30,000$ bootstrap samples to distinguish small scale $p$-values.
+Since the tests of all possible combinations (28 combinations) are time consuming, we show the result of one signature pair (signature 2 and signature 17b) as an example. 
+The entire results are provided in <tt>online_supplements.zip</tt> file. 
+To replicate the same results, please use `set.seed(1)` for all combinations regardless of cancer types.
+```{r}
+Allpairs[,11]
+tmp <- Colo_norm[, Allpairs[,11]]
+x <- tmp[,1]
+y <- tmp[,2]
+set.seed(1)
+system.time( re <- skit(x, y, nboot = 30000) )
+re
+```
+The computation is conducted in a Dell Latitude 7490 laptop with Intel(R) Core(TM) i7-8650 CPU @ 1.90GHz.
+We would like to point out that computing time may vary depending on the sample size as well as the number of non-zero elements.
+`skit()` function returns 1) `re$tests` which contains 5 test statistics (the overall SKIT test statistic (`T`) and its components (`T1`, `T2`, `T3`, `T4`));
+2) `re$pvalues` p-values corresponding to test statistics in `re$tests`;
+and 3) `re$bandwidth.obs` the bandwidth of kernel density (see Section 3 for details).
+
+We have conducted association tests for all possible pairs and <tt>SKIT_Result_ColoRect-AdenoCa.csv</tt> contains test results of all 28 combinations for colorectal adenocarcinoma.
+```{r}
+Colo_entire <- read.csv("SKIT_Result_ColoRect-AdenoCa.csv", stringsAsFactors = FALSE)
+Colo_entire[10:14,]#[Colo_entire$Sig1 == "SBS2" & Colo_entire$Sig2 == "SBS17b",]
+```
+Each row of `Colo_entire` shows `skit()` result for a pair of signatures. For example, the 11th row presents the results for the pair (SBS2, SBS17b).
+The entire results can be obtained via the following code, but we commented out due to long computation time.
+```{r}
+# Colo_re <- NULL
+# for(i in 1:ncol(Allpairs)){
+#   tmp <- Colo_norm[, Allpairs[,i]]
+#   x <- tmp[,1]
+#   y <- tmp[,2]
+#   set.seed(1)
+#   re <- skit(x, y, nboot = 30000)
+#   tmp1 <- matrix(c(re$bandwidth.obs, re$tests, re$pvalues), nrow = 1)
+#   colnames(tmp1) <- c("bws", "T", paste0("T", 1:4), "p", paste0("p", 1:4))
+#   Colo_re <- rbind(Colo_re, tmp1)
+# }
+# Colo_re
+```
+#### 2.1 Test results for other cancer type
+`skit()` results of the signature pair 2 and 17b from esophageal and stomach adenocarcinoma, can be obtained from the following codes.
+<tt>SKIT_Result_Eso-AdenoCa.csv</tt> and <tt>SKIT_Result_Stomach-AdenoCa.csv</tt> contain test results of all combinations.
+```{r}
+Eso_norm <- t(apply(Eso,1, function(x){x/sum(x)}))
+Eso_norm[is.nan(Eso_norm)] <- 0
+Allpairs <- combn(names(Eso), 2)
+tmp <- Eso_norm[, Allpairs[,14]]
+x <- tmp[,1]
+y <- tmp[,2]
+set.seed(1)
+re <- skit(x, y, nboot = 30000)
+Eso_entire <- read.csv("SKIT_Result_Eso-AdenoCa.csv", stringsAsFactors = FALSE)
+re
+Eso_entire[14,]
+```
+
+```{r}
+Stom_norm <- t(apply(Stom,1, function(x){x/sum(x)}))
+Stom_norm[is.nan(Stom_norm)] <- 0
+Allpairs <- combn(names(Stom_chk), 2)
+tmp <- Stom_norm[, Allpairs[,13]]
+x <- tmp[,1]
+y <- tmp[,2]
+set.seed(1)
+re <- skit(x, y, nboot = 30000)
+Stom_entire <- read.csv("SKIT_Result_Stomach-AdenoCa.csv", stringsAsFactors = FALSE)
+re
+Stom_entire[13,]
+```
+
+
+
+### 3. Creating Table 2
+The following codes are used to generate Table 2.
+```{r}
+Eso_entire <- read.csv("SKIT_Result_Eso-AdenoCa.csv", stringsAsFactors = FALSE)
+Stom_entire <- read.csv("SKIT_Result_Stomach-AdenoCa.csv", stringsAsFactors = FALSE)
+Skit_Colo_FDR <- cbind(Colo_entire[,1:2], round(Colo_entire[,-(1:3)],4),
+                       BH = round(p.adjust(Colo_entire$p, method = "BH"), 4),
+                       BH1 = round(p.adjust(Colo_entire$p1, method = "BH"), 4),
+                       BH2 = round(p.adjust(Colo_entire$p2, method = "BH"), 4),
+                       BH3 = round(p.adjust(Colo_entire$p3, method = "BH"), 4),
+                       BH4 = round(p.adjust(Colo_entire$p4, method = "BH"), 4))
+Skit_Eso_FDR <- cbind(Eso_entire[,1:2], round(Eso_entire[,-(1:3)],4),
+                       BH = round(p.adjust(Eso_entire$p, method = "BH"), 4),
+                       BH1 = round(p.adjust(Eso_entire$p1, method = "BH"), 4),
+                       BH2 = round(p.adjust(Eso_entire$p2, method = "BH"), 4),
+                       BH3 = round(p.adjust(Eso_entire$p3, method = "BH"), 4),
+                       BH4 = round(p.adjust(Eso_entire$p4, method = "BH"), 4))
+Skit_Stom_FDR <- cbind(Stom_entire[,1:2], round(Stom_entire[,-(1:3)],4),
+                      BH = round(p.adjust(Stom_entire$p, method = "BH"), 4),
+                      BH1 = round(p.adjust(Stom_entire$p1, method = "BH"), 4),
+                      BH2 = round(p.adjust(Stom_entire$p2, method = "BH"), 4),
+                      BH3 = round(p.adjust(Stom_entire$p3, method = "BH"), 4),
+                      BH4 = round(p.adjust(Stom_entire$p4, method = "BH"), 4))
+Tab2 <- rbind(
+          Skit_Colo_FDR[Skit_Colo_FDR$Sig1 %in% c("SBS2", "SBS13") &
+                        Skit_Colo_FDR$Sig2 %in% c("SBS17a", "SBS17b"),
+                        c("Sig1", "Sig2", "BH", "BH1", "BH2", "BH3", "BH4")],
+          Skit_Eso_FDR[Skit_Eso_FDR$Sig1 %in% c("SBS2", "SBS13") &
+                         Skit_Eso_FDR$Sig2 %in% c("SBS17a", "SBS17b"),
+                        c("Sig1", "Sig2", "BH", "BH1", "BH2", "BH3", "BH4")],
+          Skit_Stom_FDR[Skit_Stom_FDR$Sig1 %in% c("SBS2", "SBS13") &
+                        Skit_Stom_FDR$Sig2 %in% c("SBS17a", "SBS17b"),
+                        c("Sig1", "Sig2", "BH", "BH1", "BH2", "BH3", "BH4")]
+        )
+names(Tab2) <- c("Sig1", "Sig2", "T", "T1", "T2", "T3", "T4")
+row.names(Tab2) <- NULL
+Tab2 <- cbind(Type = c("colorectal", "", "esophageal", "", "", "", "stomach", "", "", ""), Tab2)
+library(knitr)
+kable(Tab2, caption = "Table 2. FDR adjusted p-values of all active pairs between 17a/b and
+      APOBEC-mediated signatures for gastrointestinal cancers.")
+```
+
+
+### 4. Generating Figure S.3
+For the signature pairs 2 and 17b, we provide the following scatterplots to investigate in detail.
+```{r, fig.height=4,fig.width=12}
+library(ggplot2)
+library(gridExtra)
+# Colorectal adenocarcinoma 2 and 17b
+x <- Colo_norm[, "SBS2"]
+y <- Colo_norm[, "SBS17b"]
+Colo_D <- data.frame(x,y)
+Colo_D$idx <- factor(ifelse(Colo_D$x != 0 & Colo_D$y != 0, 1, 0))
+Colo217b <- ggplot(data = Colo_D, aes(x = x, y = y, shape = idx)) + geom_point(size = 2) +
+    xlab("Signature 2") + ylab("Signature 17b") +
+    scale_shape_manual(values = c(19, 1)) + ggtitle("(a) Colorectal adenocarcinoma") +
+    theme(legend.position = "none", panel.background = element_blank(),
+          axis.line = element_blank(), axis.ticks = element_blank(),
+          axis.title = element_text(size = 10), axis.text = element_text(size = 10),
+          plot.title = element_text(size = 10, hjust = 0)) +
+    geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+    scale_x_continuous(limits = c(0, 0.55), expand = c(0, 0.01)) +
+    scale_y_continuous(limits = c(0, 0.55), expand = c(0, 0.01))
+# Esophageal adenocarcinoma 2 and 17b
+Eso_norm <- t(apply(Eso,1, function(x){x/sum(x)}))
+Eso_norm[is.nan(Eso_norm)] <- 0
+x <- Eso_norm[, "SBS2"]
+y <- Eso_norm[, "SBS17b"]
+Eso_D <- data.frame(x,y)
+Eso_D$idx <- factor(ifelse(Eso_D$x != 0 & Eso_D$y != 0, 1, 0))
+Eso217b <- ggplot(data = Eso_D, aes(x = x, y = y, shape = idx)) + geom_point(size = 2) +
+    xlab("Signature 2") + ylab("Signature 17b") +
+    scale_shape_manual(values = c(19, 1)) + ggtitle("(b) Esophageal adenocarcinoma") +
+    theme(legend.position = "none", panel.background = element_blank(),
+          axis.line = element_blank(), axis.ticks = element_blank(),
+          axis.title = element_text(size = 10), axis.text = element_text(size = 10),
+          plot.title = element_text(size = 10, hjust = 0)) +
+    geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+    scale_x_continuous(limits = c(0, 0.55), expand = c(0, 0.01)) +
+    scale_y_continuous(limits = c(0, 0.55), expand = c(0, 0.01))
+# Stomach adenocarcinoma 2 and 17b
+Stom_norm <- t(apply(Stom,1, function(x){x/sum(x)}))
+Stom_norm[is.nan(Stom_norm)] <- 0
+x <- Stom_norm[, "SBS2"]
+y <- Stom_norm[, "SBS17b"]
+Stom_D <- data.frame(x,y)
+Stom_D$idx <- factor(ifelse(Stom_D$x != 0 & Stom_D$y != 0, 1, 0))
+Stom217b <- ggplot(data = Stom_D, aes(x = x, y = y, shape = idx)) + geom_point(size = 2) +
+    xlab("Signature 2") + ylab("Signature 17b") +
+    scale_shape_manual(values = c(19, 1)) + ggtitle("(c) Stomach adenocarcinoma") +
+    theme(legend.position = "none", panel.background = element_blank(),
+          axis.line = element_blank(), axis.ticks = element_blank(),
+          axis.title = element_text(size = 10), axis.text = element_text(size = 10),
+          plot.title = element_text(size = 10, hjust = 0)) +
+    geom_hline(yintercept = 0) + geom_vline(xintercept = 0) +
+    scale_x_continuous(limits = c(0, 0.55), expand = c(0, 0.01)) +
+    scale_y_continuous(limits = c(0, 0.55), expand = c(0, 0.01))
+grid.arrange(Colo217b, Eso217b, Stom217b, nrow = 1)
+```
+
+
+### 5. Making Figure 4
+The following plots are modification from the one found in http://jokergoo.github.io/blog/html/large_matrix_circular.html.
+The source code of function `cir.corr()` can be found in "cir.corr.R" but please note that the `circlize` package is required.
+```{r, fig.height = 12, fig.width = 12}
+source("cir.corr.R")
+library(circlize)
+par(mfrow = c(2,2))
+cir.corr("Colo")
+cir.corr("Eso")
+cir.corr("Stom")
+```
+
+
+### 6. Session Info
+```{r}
+sessionInfo()
+```
