@@ -24,7 +24,7 @@ SKIT_Supplementary.pdf presents proofs and additional simulation/data analysis r
 Tables and Figures.Rmd is a R markdown file containing contains code to reproduce results for TCGA data analysis. 
 A compiled html version Tables-and-Figures.html describes a detailed workflow to generate the main results 
 in Table 2, Figure S.3 and Figure 4. 
-In order to create Figure 4, the source code cir.corr.R and the R package ‘circlize’ will be required.
+In order to create Figure 4, the source code cir.corr.R and the R package â€˜circlizeâ€™ will be required.
 
 TCGA_WES_sigProfiler_SBS_signatures_in_samples.csv contains signatures and individual loading counts across 32 cancer types and
 can be downloaded from https://www.synapse.org/#!Synapse:syn11801497.
